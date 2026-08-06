@@ -1,0 +1,29 @@
+# Secrets / credentials
+.env
+*.env
+
+# Garmin session tokens (never commit these — they grant account access)
+.garminconnect/
+
+# Downloaded activity data (personal, regenerable, and can get large)
+data/
+*.gpx
+
+# Generated output
+all_activities.html
+*.html
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+activities_cache.json

@@ -1,0 +1,4 @@
+garminconnect>=0.2.24
+gpxpy>=1.6.2
+folium>=0.17.0
+python-dotenv>=1.0.1
