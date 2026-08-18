@@ -1,30 +1,14 @@
-#!/usr/bin/env python3
-"""
-garmin_map.py
-
-Fetches all Garmin Connect activities, downloads GPX tracks for the ones
-that have GPS data, and plots them all on a single interactive map.
-
-Usage:
-    python garmin_map.py
-
-First run will prompt for your Garmin email/password (or set env vars
-GARMIN_EMAIL / GARMIN_PASSWORD). After that, the session token is cached
-locally so you won't need to log in again for a while.
-
-Output:
-    gpx/                -> cached GPX files, one per activity
-    activities_cache.json -> cached activity metadata (so re-runs are fast)
-    all_activities.html -> the final interactive map
-"""
-
+#---------------------------------Import---------------------------------
 import os
 import sys
 import json
 import time
 import glob
 import getpass
+import threading
 from pathlib import Path
+import tkinter
+import webbrowser
 
 import gpxpy
 import folium
@@ -36,18 +20,17 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-# ----------------------------------Config-----------------------------------------
-
-TOKEN_STORE = Path.home() / ".garminconnect"
-GPX_DIR = Path("gpx")
-ACTIVITIES_CACHE = Path("activities_cache.json")
+#---------------------------------Config files---------------------------------
+TOKEN_STORE = Path.home() / ".garminworldmap" / "token"
+GPX_DIR = Path.home() / ".garminworldmap" / "gpx"
+ACTIVITIES_CACHE = Path.home() / ".garminworldmap" / "activities_cache.json"
+CREDENTIALS_FILE = Path.home() / ".garminworldmap" / "credentials.json"
 OUTPUT_MAP = Path("all_activities.html")
 
 BATCH_SIZE = 100
-REQUEST_DELAY = 0.4  # seconds between API calls, be polite to Garmin's servers
+REQUEST_DELAY = 0.4
 
-# Color by sport type (falls back to gray for anything not listed)
-SPORT_COLORS = {
+SPORT_COLOURS = {
     "running": "crimson",
     "cycling": "royalblue",
     "hiking": "seagreen",
@@ -56,31 +39,32 @@ SPORT_COLORS = {
     "mountain_biking": "purple",
     "swimming": "teal",
 }
-DEFAULT_COLOR = "gray"
 
+DEFAULT_COLOUR = "gray"
 
-# ----------------------------------Auth-----------------------------------------
+#---------------------------------Authentication---------------------------------
 
+def get_client(email=None, password=None, mfa=None):
+    token_store_path = str(TOKEN_STORE)
 
-def get_client():
-    """
-    Log in to Garmin Connect, reusing a cached session token if available.
+    if email is None:
+        email = input("Garmin email: ").strip()
+    if password is None:
+        password = getpass.getpass("Garmin password: ")
 
-    The library saves/restores tokens itself when you pass a tokenstore path
-    into login() — there's no separate "dump" step to call manually.
-    """
-    tokenstore_path = str(TOKEN_STORE)
+    mfa_code = (mfa or "").strip()
 
-    # 1) Try to restore a cached session first — avoids hitting the login
-    #    endpoint (and its rate limiting) on every run.
+    def prompt_mfa():
+        if mfa_code:
+            return mfa_code
+        return input("MFA code: ").strip()
+
     try:
-        client = Garmin()
-        client.login(tokenstore_path)
-        print("Logged in using cached session token.")
+        client = Garmin(email, password)
+        client.login(token_store_path)
         return client
-    except GarminConnectTooManyRequestsError as e:
-        print(f"Rate limited by Garmin: {e}")
-        print("Wait a while before retrying.")
+    except GarminConnectTooManyRequestsError:
+        print("Too many requests. Please try again later.")
         sys.exit(1)
     except (
         FileNotFoundError,
@@ -89,27 +73,18 @@ def get_client():
     ) as e:
         print(f"No usable cached session ({e}), logging in fresh...")
 
-    # 2) Fresh login with credentials
-    email = os.environ.get("GARMIN_EMAIL") or input("Garmin email: ")
-    password = os.environ.get("GARMIN_PASSWORD") or getpass.getpass("Garmin password: ")
-
-    client = Garmin(email=email, password=password)
+    client = Garmin(email, password, prompt_mfa=prompt_mfa)
     try:
-        # Passing tokenstore_path here makes login() save the session there
-        # after a successful login, so next run can skip straight to step 1.
-        client.login(tokenstore_path)
+        client.login(token_store_path)
     except GarminConnectTooManyRequestsError as e:
         print(f"Rate limited by Garmin: {e}")
         sys.exit(1)
 
-    print(f"Logged in and cached session to {tokenstore_path}")
+    print(f"Logged in and cached session to {token_store_path}")
     return client
 
-
-# ----------------------------------Fetching activities-----------------------------------------
-
-def fetch_all_activities(client):
-    """Page through Garmin's activity list, with local caching."""
+#---------------------------------Fetching activities---------------------------------
+def fetch_activities(client):
     if ACTIVITIES_CACHE.exists():
         print(f"Loading cached activity list from {ACTIVITIES_CACHE}...")
         with open(ACTIVITIES_CACHE) as f:
@@ -125,7 +100,6 @@ def fetch_all_activities(client):
             print(f"Error fetching activities at offset {start}: {e}")
             print("Stopping here; you can re-run to retry (cache will resume).")
             break
-
         if not batch:
             break
 
@@ -140,20 +114,18 @@ def fetch_all_activities(client):
 
     with open(ACTIVITIES_CACHE, "w") as f:
         json.dump(all_activities, f)
-    print(f"Saved {len(all_activities)} activities to {ACTIVITIES_CACHE}")
+    print(f"Saved {len(all_activities)} activities to cache at {ACTIVITIES_CACHE}")
 
     return all_activities
 
-
-def has_gps(activity):
+def has_GPS(activity):
     return activity.get("hasPolyline") is True
 
+#---------------------------------Download GPX---------------------------------
 
-# ----------------------------------Downloading GPX tracks-----------------------------------------
-
-def download_gpx_files(client, activities):
+def download_gpx(client, activities):
     GPX_DIR.mkdir(exist_ok=True)
-    gps_activities = [a for a in activities if has_gps(a)]
+    gps_activities = [a for a in activities if has_GPS(a)]
     print(f"{len(gps_activities)} of {len(activities)} activities have GPS tracks.")
 
     for i, activity in enumerate(gps_activities, 1):
@@ -161,32 +133,30 @@ def download_gpx_files(client, activities):
         gpx_path = GPX_DIR / f"{activity_id}.gpx"
 
         if gpx_path.exists():
-            continue  # already downloaded
-
+            print(f"[{i}/{len(gps_activities)}] Skipping {activity_id} (already downloaded).")
+            continue
         try:
-            gpx_data = client.download_activity(
-                activity_id,
-                dl_fmt=client.ActivityDownloadFormat.GPX,
-            )
+            gpx_data = client.download_activity(activity_id, dl_fmt=client.ActivityDownloadFormat.GPX)
             if gpx_data and len(gpx_data) > 200:
-                with open(gpx_path, "wb") as f:
-                    f.write(gpx_data)
-            else:
-                print(f"  [{i}/{len(gps_activities)}] {activity_id}: empty GPX, skipping")
+                if gpx_data and len(gpx_data) > 200:
+                    with open(gpx_path, "wb") as f:
+                        f.write(gpx_data)
+                    print(f"[{i}/{len(gps_activities)}] Downloaded {activity_id} to {gpx_path}.")
+                else:
+                    print(f"  [{i}/{len(gps_activities)}] {activity_id}: empty GPX, skipping")
+
         except Exception as e:
-            print(f"  [{i}/{len(gps_activities)}] {activity_id}: failed ({e})")
+            print(f"  [{i}/{len(gps_activities)}] {activity_id}: error downloading GPX: {e}")
 
         if i % 25 == 0:
-            print(f"  Downloaded {i}/{len(gps_activities)}...")
-
+            print(f"  Downloaded {i} of {len(gps_activities)} activities so far...")
         time.sleep(REQUEST_DELAY)
 
-    print("GPX download complete.")
+    print (f"Downloaded GPX files for {len(gps_activities)} activities to {GPX_DIR}.")
 
+#---------------------------------GPX parsing---------------------------------
 
-# ----------------------------------Parsing GPX-----------------------------------------
-
-def get_coords(gpx_path):
+def get_coordinates(gpx_path):
     try:
         with open(gpx_path) as f:
             gpx = gpxpy.parse(f)
@@ -201,66 +171,187 @@ def get_coords(gpx_path):
     return coords
 
 
-# ----------------------------------Plotting-----------------------------------------
+#---------------------------------Plotting---------------------------------
 
-def build_map(activities, mode="lines"):
+def build_map(activities, mode='lines'):
     """mode: 'lines' for colored routes, 'heatmap' for a Strava-style heatmap."""
     activity_by_id = {a["activityId"]: a for a in activities}
-
     m = folium.Map(location=[0, 0], zoom_start=2, tiles="cartodbpositron")
 
-    all_lats, all_lons = [], []
-    all_points_for_heatmap = []
+    all_latitudes, all_longitudes = [], []
+    all_points_heatmap = []
     plotted = 0
 
     for gpx_file in sorted(glob.glob(str(GPX_DIR / "*.gpx"))):
         activity_id = int(Path(gpx_file).stem)
-        coords = get_coords(gpx_file)
+        coords = get_coordinates(gpx_file)
         if not coords:
+            print(f"  No coordinates found in {gpx_file}, skipping.")
             continue
-
-        if mode == "heatmap":
-            all_points_for_heatmap.extend(coords)
+        if mode == 'heatmap':
+            all_points_heatmap.extend(coords)
         else:
             activity = activity_by_id.get(activity_id, {})
-            sport = activity.get("activityType", {}).get("typeKey", "")
-            color = SPORT_COLORS.get(sport, DEFAULT_COLOR)
+            activity_type = activity.get("activityType", {})
+            sport = activity_type.get("typeKey", "") if isinstance(activity_type, dict) else ""
+            color = SPORT_COLOURS.get(sport, DEFAULT_COLOUR)
             name = activity.get("activityName", str(activity_id))
 
-            folium.PolyLine(
-                coords,
-                color=color,
-                weight=2,
-                opacity=0.6,
-                tooltip=name,
-            ).add_to(m)
+            folium.PolyLine(coords, color=color, weight=2, opacity=0.6, tooltip=name).add_to(m)
 
-        all_lats.extend(c[0] for c in coords)
-        all_lons.extend(c[1] for c in coords)
+        all_latitudes.extend(c[0] for c in coords)
+        all_longitudes.extend(c[1] for c in coords)
         plotted += 1
 
-    if mode == "heatmap" and all_points_for_heatmap:
-        HeatMap(all_points_for_heatmap, radius=4, blur=3).add_to(m)
+    if mode == 'heatmap':
+        HeatMap(all_points_heatmap, radius=5, blur=3).add_to(m)
 
-    if all_lats:
-        m.fit_bounds([[min(all_lats), min(all_lons)], [max(all_lats), max(all_lons)]])
+    if all_latitudes:
+        m.fit_bounds([[min(all_latitudes), min(all_longitudes)], [max(all_latitudes), max(all_longitudes)]])
 
     print(f"Plotted {plotted} activities on the map.")
+
     return m
 
 
-# ----------------------------------Main-----------------------------------------
 
-def main():
-    mode = "heatmap" if "--heatmap" in sys.argv else "lines"
+#---------------------------------Terminal Output Redirector---------------------------------
 
-    client = get_client()
-    activities = fetch_all_activities(client)
-    download_gpx_files(client, activities)
-    m = build_map(activities, mode=mode)
-    m.save(str(OUTPUT_MAP))
-    print(f"\nDone! Open {OUTPUT_MAP.resolve()} in your browser.")
+class TerminalOutputRedirector:
+    def __init__(self, root, text_widget):
+        """Initializes the redirector with a target Tkinter Text widget."""
+        self.root = root
+        self.text_widget = text_widget
+
+    def write(self, string):
+        """Intercepts stream writes and inserts them into the widget."""
+        def append_to_widget():
+            if not self.text_widget.winfo_exists():
+                return
+            self.text_widget.config(state="normal")
+            self.text_widget.insert(tkinter.END, string)
+            self.text_widget.see(tkinter.END)
+            self.text_widget.config(state="disabled")
+
+        self.root.after(0, append_to_widget)
+
+    def flush(self):
+        """Required for stream compatibility, keeps buffer operations safe."""
+        pass
 
 
-if __name__ == "__main__":
-    main()
+#---------------------------------Main---------------------------------
+
+def load_saved_credentials():
+    try:
+        if not CREDENTIALS_FILE.exists():
+            return "", ""
+        with open(CREDENTIALS_FILE, "r") as f:
+            data = json.load(f)
+        return str(data.get("email", "")), str(data.get("password", ""))
+    except Exception:
+        return "", ""
+
+
+def save_credentials(email, password):
+    try:
+        CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(CREDENTIALS_FILE, "w") as f:
+            json.dump({"email": email, "password": password}, f)
+    except Exception as exc:
+        print(f"Could not save credentials: {exc}")
+
+
+def run_export(email, password, mfa_code, mode):
+    try:
+        save_credentials(email, password)
+        client = get_client(email=email, password=password, mfa=mfa_code)
+        activities = fetch_activities(client)
+        download_gpx(client, activities)
+        m = build_map(activities, mode=mode)
+        m.save(str(OUTPUT_MAP))
+        webbrowser.open(str(OUTPUT_MAP.resolve()))
+        print(f"\nDone! Open {OUTPUT_MAP.resolve()} in your browser.")
+    except Exception as exc:
+        print(f"\nError: {exc}")
+    finally:
+        root.after(0, lambda: button_run.config(state="normal"))
+
+
+def clear_cache():
+    try:
+        if TOKEN_STORE.exists():
+            TOKEN_STORE.unlink()
+        if ACTIVITIES_CACHE.exists():
+            ACTIVITIES_CACHE.unlink()
+        if CREDENTIALS_FILE.exists():
+            CREDENTIALS_FILE.unlink()
+        if GPX_DIR.exists():
+            for file in GPX_DIR.glob("*"):
+                if file.is_file():
+                    file.unlink()
+            if not any(GPX_DIR.iterdir()):
+                GPX_DIR.rmdir()
+        if OUTPUT_MAP.exists():
+            OUTPUT_MAP.unlink()
+        print("All cached Garmin data has been cleared.")
+        eUsername.delete(0, tkinter.END)
+        ePassword.delete(0, tkinter.END)
+        eMFA.delete(0, tkinter.END)
+    except Exception as exc:
+        print(f"Could not clear cache: {exc}")
+
+
+def OK():
+    email = eUsername.get().strip()
+    password = ePassword.get().strip()
+    mfa_code = eMFA.get().strip()
+    mode = "heatmap" if heatmap_var.get() else "lines"
+
+    if not email or not password:
+        print("Please enter your Garmin email and password.")
+        return
+
+    button_run.config(state="disabled")
+    thread = threading.Thread(target=run_export, args=(email, password, mfa_code, mode), daemon=True)
+    thread.start()
+
+#---------------------------------GUI---------------------------------
+root = tkinter.Tk()
+root.wm_title("Garmin World Map")
+
+main_frame = tkinter.Frame(root)
+main_frame.pack(padx=10, pady=10, fill="x")
+
+saved_email, saved_password = load_saved_credentials()
+
+tkinter.Label(main_frame, text="Garmin World Map", font=("Helvetica", 16)).pack(pady=(0, 10))
+tkinter.Label(main_frame, text='Username:').pack(anchor='w')
+eUsername = tkinter.Entry(main_frame, width=30)
+eUsername.insert(0, saved_email)
+eUsername.pack(pady=(0, 5), fill="x")
+tkinter.Label(main_frame, text='Password:').pack(anchor='w')
+ePassword = tkinter.Entry(main_frame, width=30, show="*")
+ePassword.insert(0, saved_password)
+ePassword.pack(pady=(0, 5), fill="x")
+tkinter.Label(main_frame, text='MFA code (optional):').pack(anchor='w')
+eMFA = tkinter.Entry(main_frame, width=30)
+eMFA.pack(pady=(0, 5), fill="x")
+heatmap_var = tkinter.BooleanVar(value=False)
+heatmap_checkbox = tkinter.Checkbutton(main_frame, text="Heatmap mode", variable=heatmap_var)
+heatmap_checkbox.pack(anchor='w', pady=(0, 10))
+button_run = tkinter.Button(main_frame, text="OK", command=OK)
+button_run.pack(fill="x", pady=(0, 5))
+button_clear_cache = tkinter.Button(main_frame, text="Clear all cache", command=clear_cache)
+button_clear_cache.pack(fill="x")
+
+ePassword.bind('<Return>', lambda event: OK())
+eMFA.bind('<Return>', lambda event: OK())
+
+console_box = tkinter.Text(root, wrap="word", state="disabled", bg="black", fg="white")
+console_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+# Redirect terminal stdout to our custom class
+sys.stdout = TerminalOutputRedirector(root, console_box)
+
+root.mainloop()
