@@ -24,6 +24,7 @@ from garminconnect import (
 TOKEN_STORE = Path.home() / ".garminworldmap" / "token"
 GPX_DIR = Path.home() / ".garminworldmap" / "gpx"
 ACTIVITIES_CACHE = Path.home() / ".garminworldmap" / "activities_cache.json"
+CREDENTIALS_FILE = Path.home() / ".garminworldmap" / "credentials.json"
 OUTPUT_MAP = Path("all_activities.html")
 
 BATCH_SIZE = 100
@@ -51,6 +52,13 @@ def get_client(email=None, password=None, mfa=None):
     if password is None:
         password = getpass.getpass("Garmin password: ")
 
+    mfa_code = (mfa or "").strip()
+
+    def prompt_mfa():
+        if mfa_code:
+            return mfa_code
+        return input("MFA code: ").strip()
+
     try:
         client = Garmin(email, password)
         client.login(token_store_path)
@@ -65,7 +73,7 @@ def get_client(email=None, password=None, mfa=None):
     ) as e:
         print(f"No usable cached session ({e}), logging in fresh...")
 
-    client = Garmin(email, password, prompt_mfa=lambda: input("MFA code: ").strip())
+    client = Garmin(email, password, prompt_mfa=prompt_mfa)
     try:
         client.login(token_store_path)
     except GarminConnectTooManyRequestsError as e:
@@ -207,20 +215,143 @@ def build_map(activities, mode='lines'):
 
 
 
+#---------------------------------Terminal Output Redirector---------------------------------
 
-def main():
-    mode = "heatmap" if "--heatmap" in sys.argv else "lines"
+class TerminalOutputRedirector:
+    def __init__(self, root, text_widget):
+        """Initializes the redirector with a target Tkinter Text widget."""
+        self.root = root
+        self.text_widget = text_widget
 
-    email = os.getenv("GARMIN_EMAIL")
-    password = os.getenv("GARMIN_PASSWORD")
-    client = get_client(email=email, password=password)
-    activities = fetch_activities(client)
-    download_gpx(client, activities)
-    m = build_map(activities, mode=mode)
-    m.save(str(OUTPUT_MAP))
-    webbrowser.open(str(OUTPUT_MAP.resolve()))
-    print(f"\nDone! Open {OUTPUT_MAP.resolve()} in your browser.")
+    def write(self, string):
+        """Intercepts stream writes and inserts them into the widget."""
+        def append_to_widget():
+            if not self.text_widget.winfo_exists():
+                return
+            self.text_widget.config(state="normal")
+            self.text_widget.insert(tkinter.END, string)
+            self.text_widget.see(tkinter.END)
+            self.text_widget.config(state="disabled")
+
+        self.root.after(0, append_to_widget)
+
+    def flush(self):
+        """Required for stream compatibility, keeps buffer operations safe."""
+        pass
 
 
-if __name__ == "__main__":
-    main()
+#---------------------------------Main---------------------------------
+
+def load_saved_credentials():
+    try:
+        if not CREDENTIALS_FILE.exists():
+            return "", ""
+        with open(CREDENTIALS_FILE, "r") as f:
+            data = json.load(f)
+        return str(data.get("email", "")), str(data.get("password", ""))
+    except Exception:
+        return "", ""
+
+
+def save_credentials(email, password):
+    try:
+        CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(CREDENTIALS_FILE, "w") as f:
+            json.dump({"email": email, "password": password}, f)
+    except Exception as exc:
+        print(f"Could not save credentials: {exc}")
+
+
+def run_export(email, password, mfa_code, mode):
+    try:
+        save_credentials(email, password)
+        client = get_client(email=email, password=password, mfa=mfa_code)
+        activities = fetch_activities(client)
+        download_gpx(client, activities)
+        m = build_map(activities, mode=mode)
+        m.save(str(OUTPUT_MAP))
+        webbrowser.open(str(OUTPUT_MAP.resolve()))
+        print(f"\nDone! Open {OUTPUT_MAP.resolve()} in your browser.")
+    except Exception as exc:
+        print(f"\nError: {exc}")
+    finally:
+        root.after(0, lambda: button_run.config(state="normal"))
+
+
+def clear_cache():
+    try:
+        if TOKEN_STORE.exists():
+            TOKEN_STORE.unlink()
+        if ACTIVITIES_CACHE.exists():
+            ACTIVITIES_CACHE.unlink()
+        if CREDENTIALS_FILE.exists():
+            CREDENTIALS_FILE.unlink()
+        if GPX_DIR.exists():
+            for file in GPX_DIR.glob("*"):
+                if file.is_file():
+                    file.unlink()
+            if not any(GPX_DIR.iterdir()):
+                GPX_DIR.rmdir()
+        if OUTPUT_MAP.exists():
+            OUTPUT_MAP.unlink()
+        print("All cached Garmin data has been cleared.")
+        eUsername.delete(0, tkinter.END)
+        ePassword.delete(0, tkinter.END)
+        eMFA.delete(0, tkinter.END)
+    except Exception as exc:
+        print(f"Could not clear cache: {exc}")
+
+
+def OK():
+    email = eUsername.get().strip()
+    password = ePassword.get().strip()
+    mfa_code = eMFA.get().strip()
+    mode = "heatmap" if heatmap_var.get() else "lines"
+
+    if not email or not password:
+        print("Please enter your Garmin email and password.")
+        return
+
+    button_run.config(state="disabled")
+    thread = threading.Thread(target=run_export, args=(email, password, mfa_code, mode), daemon=True)
+    thread.start()
+
+#---------------------------------GUI---------------------------------
+root = tkinter.Tk()
+root.wm_title("Garmin World Map")
+
+main_frame = tkinter.Frame(root)
+main_frame.pack(padx=10, pady=10, fill="x")
+
+saved_email, saved_password = load_saved_credentials()
+
+tkinter.Label(main_frame, text="Garmin World Map", font=("Helvetica", 16)).pack(pady=(0, 10))
+tkinter.Label(main_frame, text='Username:').pack(anchor='w')
+eUsername = tkinter.Entry(main_frame, width=30)
+eUsername.insert(0, saved_email)
+eUsername.pack(pady=(0, 5), fill="x")
+tkinter.Label(main_frame, text='Password:').pack(anchor='w')
+ePassword = tkinter.Entry(main_frame, width=30, show="*")
+ePassword.insert(0, saved_password)
+ePassword.pack(pady=(0, 5), fill="x")
+tkinter.Label(main_frame, text='MFA code (optional):').pack(anchor='w')
+eMFA = tkinter.Entry(main_frame, width=30)
+eMFA.pack(pady=(0, 5), fill="x")
+heatmap_var = tkinter.BooleanVar(value=False)
+heatmap_checkbox = tkinter.Checkbutton(main_frame, text="Heatmap mode", variable=heatmap_var)
+heatmap_checkbox.pack(anchor='w', pady=(0, 10))
+button_run = tkinter.Button(main_frame, text="OK", command=OK)
+button_run.pack(fill="x", pady=(0, 5))
+button_clear_cache = tkinter.Button(main_frame, text="Clear all cache", command=clear_cache)
+button_clear_cache.pack(fill="x")
+
+ePassword.bind('<Return>', lambda event: OK())
+eMFA.bind('<Return>', lambda event: OK())
+
+console_box = tkinter.Text(root, wrap="word", state="disabled", bg="black", fg="white")
+console_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+# Redirect terminal stdout to our custom class
+sys.stdout = TerminalOutputRedirector(root, console_box)
+
+root.mainloop()
