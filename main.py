@@ -11,6 +11,11 @@ import tkinter
 import customtkinter as ctk
 import webbrowser
 
+try:
+    import webview
+except ImportError:  # pragma: no cover
+    webview = None
+
 import gpxpy
 import folium
 from folium.plugins import HeatMap
@@ -264,6 +269,27 @@ def save_credentials(email, password):
         print(f"Could not save credentials: {exc}")
 
 
+def open_map(html_path):
+    resolved_path = html_path.resolve()
+
+    if webview is not None:
+        try:
+            webview.create_window(
+                "Garmin World Map",
+                str(resolved_path),
+                width=1400,
+                height=1000,
+            )
+            print(f"\nOpening map in embedded browser: {resolved_path}")
+            webview.start()
+            return
+        except Exception as exc:
+            print(f"Could not open embedded browser ({exc}). Falling back to normal browser.")
+
+    webbrowser.open(str(resolved_path))
+    print(f"\nDone! Open {resolved_path} in your browser.")
+
+
 def run_export(email, password, mfa_code, mode):
     try:
         save_credentials(email, password)
@@ -272,12 +298,11 @@ def run_export(email, password, mfa_code, mode):
         download_gpx(client, activities)
         m = build_map(activities, mode=mode)
         m.save(str(OUTPUT_MAP))
-        webbrowser.open(str(OUTPUT_MAP.resolve()))
-        print(f"\nDone! Open {OUTPUT_MAP.resolve()} in your browser.")
     except Exception as exc:
         print(f"\nError: {exc}")
     finally:
         root.after(0, lambda: button_run.configure(state="normal"))
+        root.after(0, lambda: open_map(OUTPUT_MAP))
 
 
 def clear_cache():

@@ -3,3 +3,4 @@ gpxpy>=1.6.2
 folium>=0.17.0
 python-dotenv>=1.0.1
 customtkinter>=2.10.0
+pywebview>=5.0.0
