@@ -8,6 +8,7 @@ import getpass
 import threading
 from pathlib import Path
 import tkinter
+import customtkinter as ctk
 import webbrowser
 
 import gpxpy
@@ -219,7 +220,7 @@ def build_map(activities, mode='lines'):
 
 class TerminalOutputRedirector:
     def __init__(self, root, text_widget):
-        """Initializes the redirector with a target Tkinter Text widget."""
+        """Initializes the redirector with a target text widget."""
         self.root = root
         self.text_widget = text_widget
 
@@ -228,10 +229,11 @@ class TerminalOutputRedirector:
         def append_to_widget():
             if not self.text_widget.winfo_exists():
                 return
-            self.text_widget.config(state="normal")
+
+            self.text_widget.configure(state="normal")
             self.text_widget.insert(tkinter.END, string)
             self.text_widget.see(tkinter.END)
-            self.text_widget.config(state="disabled")
+            self.text_widget.configure(state="disabled")
 
         self.root.after(0, append_to_widget)
 
@@ -275,7 +277,7 @@ def run_export(email, password, mfa_code, mode):
     except Exception as exc:
         print(f"\nError: {exc}")
     finally:
-        root.after(0, lambda: button_run.config(state="normal"))
+        root.after(0, lambda: button_run.configure(state="normal"))
 
 
 def clear_cache():
@@ -312,43 +314,46 @@ def OK():
         print("Please enter your Garmin email and password.")
         return
 
-    button_run.config(state="disabled")
+    button_run.configure(state="disabled")
     thread = threading.Thread(target=run_export, args=(email, password, mfa_code, mode), daemon=True)
     thread.start()
 
 #---------------------------------GUI---------------------------------
-root = tkinter.Tk()
-root.wm_title("Garmin World Map")
+root = ctk.CTk()
+root.title("Garmin World Map")
+root.geometry("430x620")
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("dark-blue")
 
-main_frame = tkinter.Frame(root)
+main_frame = ctk.CTkFrame(root, corner_radius=12)
 main_frame.pack(padx=10, pady=10, fill="x")
 
 saved_email, saved_password = load_saved_credentials()
 
-tkinter.Label(main_frame, text="Garmin World Map", font=("Helvetica", 16)).pack(pady=(0, 10))
-tkinter.Label(main_frame, text='Username:').pack(anchor='w')
-eUsername = tkinter.Entry(main_frame, width=30)
+ctk.CTkLabel(main_frame, text="Garmin World Map", font=("Helvetica", 16, "bold")).pack(pady=(0, 10))
+ctk.CTkLabel(main_frame, text="Username:").pack(anchor="w")
+eUsername = ctk.CTkEntry(main_frame, width=30)
 eUsername.insert(0, saved_email)
 eUsername.pack(pady=(0, 5), fill="x")
-tkinter.Label(main_frame, text='Password:').pack(anchor='w')
-ePassword = tkinter.Entry(main_frame, width=30, show="*")
+ctk.CTkLabel(main_frame, text="Password:").pack(anchor="w")
+ePassword = ctk.CTkEntry(main_frame, width=30, show="*")
 ePassword.insert(0, saved_password)
 ePassword.pack(pady=(0, 5), fill="x")
-tkinter.Label(main_frame, text='MFA code (optional):').pack(anchor='w')
-eMFA = tkinter.Entry(main_frame, width=30)
+ctk.CTkLabel(main_frame, text="MFA code (optional):").pack(anchor="w")
+eMFA = ctk.CTkEntry(main_frame, width=30)
 eMFA.pack(pady=(0, 5), fill="x")
-heatmap_var = tkinter.BooleanVar(value=False)
-heatmap_checkbox = tkinter.Checkbutton(main_frame, text="Heatmap mode", variable=heatmap_var)
-heatmap_checkbox.pack(anchor='w', pady=(0, 10))
-button_run = tkinter.Button(main_frame, text="OK", command=OK)
+heatmap_var = ctk.BooleanVar(value=False)
+heatmap_checkbox = ctk.CTkCheckBox(main_frame, text="Heatmap mode", variable=heatmap_var)
+heatmap_checkbox.pack(anchor="w", pady=(0, 10))
+button_run = ctk.CTkButton(main_frame, text="OK", command=OK, fg_color="#3a7ebf")
 button_run.pack(fill="x", pady=(0, 5))
-button_clear_cache = tkinter.Button(main_frame, text="Clear all cache", command=clear_cache)
+button_clear_cache = ctk.CTkButton(main_frame, text="Clear all cache", command=clear_cache, fg_color="#5a5a5a")
 button_clear_cache.pack(fill="x")
 
 ePassword.bind('<Return>', lambda event: OK())
 eMFA.bind('<Return>', lambda event: OK())
 
-console_box = tkinter.Text(root, wrap="word", state="disabled", bg="black", fg="white")
+console_box = ctk.CTkTextbox(root, wrap="word", state="disabled", height=12, fg_color="#1e1e1e", text_color="#f5f5f5")
 console_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
 # Redirect terminal stdout to our custom class
