@@ -2,9 +2,9 @@
 
 Plot every Garmin Connect activity you've ever recorded onto a single interactive map.
 
-Pulls your full activity history via the [Garmin Connect API](https://github.com/cyberjunky/python-garminconnect), downloads the GPS track for each one, and renders them all as colored routes (or a Strava-style density heatmap) on a zoomable [Leaflet](https://leafletjs.com/) map.
+Pulls your full activity history via the [Garmin Connect API](https://github.com/cyberjunky/python-garminconnect), downloads the GPS track for each one, and renders them all as colored routes (or a density heatmap) on a zoomable [Leaflet](https://leafletjs.com/) map.
 
-<img width="998" height="984" alt="garmin_world_map_example" src="https://github.com/user-attachments/assets/73d07988-2c5d-4c4b-a413-8b84d970bfc2" />
+<img width="649" height="976" alt="image" src="https://github.com/user-attachments/assets/2ec85ca8-858c-4001-a649-70ce2c64a51d" />
 
 
 ## Quick start (Windows, no Python required)
