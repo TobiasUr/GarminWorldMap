@@ -24,6 +24,18 @@ Copy `.env.example` to `.env` and fill in your Garmin Connect credentials:
 cp .env.example .env
 ```
 
+The application uses Esri World Street Map tiles by default, so users do not
+need an API key. If you prefer Carto tiles and have a Carto API key, add it to
+the same file:
+
+```dotenv
+CARTO_API_KEY=your-carto-api-key
+```
+
+The key is used only when generating `all_activities.html`; it is not stored
+with Garmin credentials. Keep `.env` private because the generated map contains
+the key in its tile URL.
+
 > Credentials are only used to log in and are never stored in plaintext beyond your local `.env`. After the first successful login, a session token is cached to `~/.garminconnect` so you won't need to log in again for a while.
 
 ## Usage
