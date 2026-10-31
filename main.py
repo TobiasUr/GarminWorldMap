@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
 
 import gpxpy
 import folium
+from dotenv import load_dotenv
 from folium.plugins import HeatMap
 from garminconnect import (
     Garmin,
@@ -27,11 +28,14 @@ from garminconnect import (
 )
 
 #---------------------------------Config files---------------------------------
+load_dotenv()
+
 TOKEN_STORE = Path.home() / ".garminworldmap" / "token"
 GPX_DIR = Path.home() / ".garminworldmap" / "gpx"
 ACTIVITIES_CACHE = Path.home() / ".garminworldmap" / "activities_cache.json"
 CREDENTIALS_FILE = Path.home() / ".garminworldmap" / "credentials.json"
 OUTPUT_MAP = Path("all_activities.html")
+CARTO_API_KEY = os.getenv("CARTO_API_KEY", "").strip()
 
 BATCH_SIZE = 100
 REQUEST_DELAY = 0.4
@@ -182,7 +186,27 @@ def get_coordinates(gpx_path):
 def build_map(activities, mode='lines'):
     """mode: 'lines' for colored routes, 'heatmap' for a Strava-style heatmap."""
     activity_by_id = {a["activityId"]: a for a in activities}
-    m = folium.Map(location=[0, 0], zoom_start=2, tiles="cartodbpositron")
+    if CARTO_API_KEY:
+        carto_tiles = (
+            "https://{s}.basemaps.cartocdn.com/light_all/"
+            "{z}/{x}/{y}{r}.png?api_key=" + CARTO_API_KEY
+        )
+        m = folium.Map(
+            location=[0, 0],
+            zoom_start=2,
+            tiles=carto_tiles,
+            attr="&copy; OpenStreetMap contributors &copy; CARTO",
+        )
+    else:
+        m = folium.Map(
+            location=[0, 0],
+            zoom_start=2,
+            tiles=(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                "World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+            ),
+            attr="Tiles &copy; Esri",
+        )
 
     all_latitudes, all_longitudes = [], []
     all_points_heatmap = []
